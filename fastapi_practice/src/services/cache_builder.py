@@ -7,6 +7,7 @@ SCROLL_SIZE = 100
 SCROLL_TIMEOUT = "2m"
 ELASTIC_INDEX = "movies"
 
+
 async def scroll_all_movies(elastic: AsyncElasticsearch, index: str):
     """Генератор, который скроллит все документы в индексе."""
     try:

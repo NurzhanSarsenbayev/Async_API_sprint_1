@@ -1,11 +1,33 @@
+import asyncio
+from contextlib import asynccontextmanager
+
 from elasticsearch import AsyncElasticsearch
 from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
 from redis.asyncio import Redis
 
-from api.v1 import films
+from api.v1 import films,genres,persons
 from core import config
-from db import elastic, redis
+from services.cache_builder import build_cache_on_startup
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- startup ---
+    app.state.redis = Redis(host=config.REDIS_HOST, port=config.REDIS_PORT)
+    app.state.elastic = AsyncElasticsearch(
+        hosts=[f"http://{config.ELASTIC_HOST}:{config.ELASTIC_PORT}"]
+    )
+
+    # запускаем кэширование в фоне
+    asyncio.create_task(build_cache_on_startup(app.state.elastic, app.state.redis))
+
+    yield  # здесь приложение доступно
+
+    # --- shutdown ---
+    await app.state.redis.close()
+    await app.state.elastic.close()
+
 
 app = FastAPI(
     title="Read-only API для онлайн-кинотеатра",
@@ -13,36 +35,30 @@ app = FastAPI(
     openapi_url='/api/openapi.json',
     default_response_class=ORJSONResponse,
     description="Информация о фильмах, жанрах и людях, участвовавших в создании произведения",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
-
-@app.get("/")
-async def root():
-    return {"message": "Hello, FastAPI is working!"}
-
-
-# @app.get("/api/v1/search/",
-#          response_model=List[ShortFilm],
-#          summary="Поиск кинопроизведений",
-#          description="Полнотекстовый поиск по кинопроизведениям",
-#          response_description="Название и рейтинг фильма",
-#          tags=['Полнотекстовый поиск']
-#          )
-
-@app.on_event('startup')
-async def startup():
-    redis.redis = Redis(host=config.REDIS_HOST, port=config.REDIS_PORT)
-    elastic.es = AsyncElasticsearch(
-        hosts=[f"http://{config.ELASTIC_HOST}:{config.ELASTIC_PORT}"]
-    )
-
-
-@app.on_event('shutdown')
-async def shutdown():
-    await redis.redis.close()
-    await elastic.es.close()
-
 
 # Подключаем роутер к серверу, указав префикс /v1/films
 # Теги указываем для удобства навигации по документации
-app.include_router(films.router, prefix='/api/v1/films', tags=['films'])
+
+# Роутер для фильмов
+app.include_router(
+    films.router,
+    prefix="/api/v1/films",
+    tags=["films"]
+)
+
+# Роутер для жанров
+app.include_router(
+    genres.router,
+    prefix="/api/v1/genres",
+    tags=["genres"]
+)
+
+# Роутер для персон
+app.include_router(
+    persons.router,
+    prefix="/api/v1/persons",
+    tags=["persons"]
+)

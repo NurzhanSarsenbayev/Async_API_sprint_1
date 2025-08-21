@@ -1,22 +1,44 @@
-from uuid import UUID
 from pydantic import BaseModel
+from uuid import UUID
 from typing import List, Optional
+
+from models.person import Person
+from models.genre import Genre
 
 
 class FilmShort(BaseModel):
-    """Краткая информация о фильме для списков (например, /films)."""
-    id: UUID
+    """
+    Краткая информация о фильме для списков и выдачи API.
+
+    Attributes:
+        uuid (UUID): Уникальный идентификатор фильма.
+        title (str): Название фильма.
+        imdb_rating (Optional[float]): Рейтинг IMDb (может отсутствовать).
+    """
+    uuid: UUID
     title: str
     imdb_rating: Optional[float] = None
 
 
 class Film(BaseModel):
-    """Полная информация о фильме (например, /films/{id})."""
-    id: UUID
+    """
+    Полная информация о фильме, включая описание, рейтинг, жанры и участников.
+
+    Attributes:
+        uuid (UUID): Уникальный идентификатор фильма.
+        title (str): Название фильма.
+        description (Optional[str]): Краткое описание фильма.
+        imdb_rating (Optional[float]): Рейтинг IMDb (может отсутствовать).
+        genres (List[Genre]): Список жанров фильма.
+        actors (List[Person]): Список актёров, участвовавших в фильме.
+        writers (List[Person]): Список сценаристов.
+        directors (List[Person]): Список режиссёров.
+    """
+    uuid: UUID
     title: str
     description: Optional[str] = None
     imdb_rating: Optional[float] = None
-    genre: List[str] = []
-    actors: List[str] = []
-    writers: List[str] = []
-    directors: List[str] = []
+    genres: List[Genre] = []
+    actors: List[Person] = []
+    writers: List[Person] = []
+    directors: List[Person] = []

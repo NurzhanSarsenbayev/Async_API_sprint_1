@@ -1,13 +1,11 @@
 # Базовый образ Python
 FROM python:3.11-slim
 
-# Устанавливаем зависимости системы (для psycopg2, elastic и т.п. могут понадобиться)
 RUN apt-get update && apt-get install -y \
     build-essential \
     gcc \
-    && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/*
 
-# Рабочая директория
 WORKDIR /app
 
 # Копируем зависимости
@@ -19,8 +17,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копируем код проекта
 COPY src /app/src
 
-# Открываем порт
+# Добавляем /app/src в PYTHONPATH
+ENV PYTHONPATH=/app/src
+
 EXPOSE 8000
 
 # Запуск через uvicorn
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "src"]

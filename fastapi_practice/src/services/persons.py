@@ -15,7 +15,8 @@ CACHE_TTL = 300
 
 class PersonService:
     """
-    Сервис для работы с персонами (актеры, режиссеры, сценаристы) с полным кэшированием в Redis.
+    Сервис для работы с персонами
+    (актеры, режиссеры, сценаристы) с полным кэшированием в Redis.
 
     Атрибуты:
         elastic (AsyncElasticsearch): клиент Elasticsearch.
@@ -23,7 +24,10 @@ class PersonService:
         cache_ttl (int): время жизни кэша в секундах.
     """
 
-    def __init__(self, elastic: AsyncElasticsearch, redis: Redis, cache_ttl: int = CACHE_TTL):
+    def __init__(self,
+                 elastic: AsyncElasticsearch,
+                 redis: Redis,
+                 cache_ttl: int = CACHE_TTL):
         """
         Инициализация сервиса.
 
@@ -36,15 +40,19 @@ class PersonService:
         self.redis = redis
         self.cache_ttl = cache_ttl
 
-    async def list_persons(self, size: int = 100, page: int = 1) -> List[Person]:
+    async def list_persons(self,
+                           size: int = 100,
+                           page: int = 1) -> List[Person]:
         """
         Получение списка персон с поддержкой кэширования и пагинации.
 
-        Сначала пробуем получить данные из Redis. Если кэша нет, выполняем scroll по Elasticsearch.
+        Сначала пробуем получить данные из Redis.
+        Если кэша нет, выполняем scroll по Elasticsearch.
         После получения всех персон применяем пагинацию и кэшируем результат.
 
         Args:
-            size (int, optional): количество персон на странице. По умолчанию 100.
+            size (int, optional): количество персон на странице.
+            По умолчанию 100.
             page (int, optional): номер страницы. По умолчанию 1.
 
         Returns:
@@ -54,7 +62,9 @@ class PersonService:
         cached = await self.redis.get(cache_key)
         if cached:
             persons_dict = json.loads(cached)
-            return [Person(uuid=uid, full_name=name) for uid, name in persons_dict.items()]
+            return [Person(uuid=uid,
+                           full_name=name)
+                    for uid, name in persons_dict.items()]
 
         # fallback через scroll
         persons_dict = {}
@@ -72,7 +82,8 @@ class PersonService:
                 for role in ["actors", "directors", "writers"]:
                     for p in doc["_source"].get(role, []):
                         persons_dict[p["uuid"]] = p["full_name"]
-            response = await self.elastic.scroll(scroll_id=scroll_id, scroll="2m")
+            response = await self.elastic.scroll(scroll_id=scroll_id,
+                                                 scroll="2m")
             scroll_id = response["_scroll_id"]
             hits = response["hits"]["hits"]
 
@@ -81,14 +92,18 @@ class PersonService:
         end = start + size
         limited_persons = dict(list(persons_dict.items())[start:end])
 
-        await self.redis.set(cache_key, json.dumps(limited_persons), ex=self.cache_ttl)
-        return [Person(uuid=uid, full_name=name) for uid, name in limited_persons.items()]
+        await self.redis.set(cache_key,
+                             json.dumps(limited_persons),
+                             ex=self.cache_ttl)
+        return [Person(uuid=uid,
+                       full_name=name) for uid, name in limited_persons.items()]
 
     async def get_person_by_id(self, person_id: str) -> Optional[Person]:
         """
         Получение одной персоны по UUID с кэшированием.
 
-        Сначала пробуем получить данные из Redis. Если кэша нет, выполняем поиск по документам в Elasticsearch.
+        Сначала пробуем получить данные из Redis.
+        Если кэша нет, выполняем поиск по документам в Elasticsearch.
 
         Args:
             person_id (str): UUID персоны.
@@ -122,15 +137,20 @@ class PersonService:
             for p in hits[0]["_source"].get(role, []):
                 if p["uuid"] == person_id:
                     person = Person(**p)
-                    await self.redis.set(cache_key, person.json(), ex=self.cache_ttl)
+                    await self.redis.set(cache_key,
+                                         person.json(),
+                                         ex=self.cache_ttl)
                     return person
         return None
 
-    async def search_persons(self, query_str: str) -> list[Person]:
+    async def search_persons(self,
+                             query_str: str) -> list[Person]:
         """
-        Поиск персон строго по полному имени (точное совпадение) с кэшированием.
+        Поиск персон строго по полному имени
+        (точное совпадение) с кэшированием.
 
-        Сначала пробуем получить данные из Redis. Если кэша нет, выполняем поиск по Elasticsearch
+        Сначала пробуем получить данные из Redis.
+        Если кэша нет, выполняем поиск по Elasticsearch
         в полях actors, directors и writers.
 
         Args:
@@ -143,7 +163,9 @@ class PersonService:
         cached = await self.redis.get(cache_key)
         if cached:
             persons_dicts = json.loads(cached)
-            return [Person(uuid=UUID(p["uuid"]), full_name=p["full_name"], role=p["role"]) for p in persons_dicts]
+            return [Person(uuid=UUID(p["uuid"]),
+                           full_name=p["full_name"],
+                           role=p["role"]) for p in persons_dicts]
 
         roles = ["actors", "directors", "writers"]
         hits = []
@@ -171,12 +193,16 @@ class PersonService:
                 for p in src.get(role, []):
                     if p["uuid"] not in seen_uuids and p["full_name"] == query_str:
                         seen_uuids.add(p["uuid"])
-                        result.append(Person(uuid=UUID(p["uuid"]), full_name=p["full_name"], role=role[:-1]))
+                        result.append(Person(uuid=UUID(p["uuid"]),
+                                             full_name=p["full_name"],
+                                             role=role[:-1]))
 
         # кэшируем результат
         await self.redis.set(
             cache_key,
-            json.dumps([{"uuid": str(p.uuid), "full_name": p.full_name, "role": p.role} for p in result]),
+            json.dumps([{"uuid": str(p.uuid),
+                         "full_name": p.full_name,
+                         "role": p.role} for p in result]),
             ex=self.cache_ttl
         )
 

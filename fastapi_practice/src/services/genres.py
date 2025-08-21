@@ -18,11 +18,16 @@ class GenreService:
 
     Логика работы:
     1. Попытка получить данные из Redis.
-    2. Если данных нет, делаем scroll по Elasticsearch для получения всех жанров.
-    3. Сохраняем результат в Redis для последующего быстрого доступа.
+    2. Если данных нет, делаем scroll по
+    Elasticsearch для получения всех жанров.
+    3. Сохраняем результат в Redis
+    для последующего быстрого доступа.
     """
 
-    def __init__(self, elastic: AsyncElasticsearch, redis: Redis, cache_ttl: int = CACHE_TTL):
+    def __init__(self,
+                 elastic: AsyncElasticsearch,
+                 redis: Redis,
+                 cache_ttl: int = CACHE_TTL):
         """
         Инициализация сервиса.
 
@@ -41,13 +46,15 @@ class GenreService:
         :return: список объектов Genre
         :notes:
             - Сначала пробует достать из Redis.
-            - Если нет, скроллит все документы в Elasticsearch и собирает уникальные жанры.
+            - Если нет, скроллит все документы в
+            Elasticsearch и собирает уникальные жанры.
             - Сохраняет результат в Redis с TTL.
         """
         genres_raw = await self.redis.get("genres_cache")
         if genres_raw:
             genres_dict = json.loads(genres_raw)
-            return [Genre(uuid=uid, name=name) for uid, name in genres_dict.items()]
+            return [Genre(uuid=uid,
+                          name=name) for uid, name in genres_dict.items()]
 
         # fallback через scroll
         genres_dict = {}
@@ -65,14 +72,16 @@ class GenreService:
                 for g in doc["_source"].get("genres", []):
                     genres_dict[g["uuid"]] = g["name"]
 
-            response = await self.elastic.scroll(scroll_id=scroll_id, scroll="2m")
+            response = await self.elastic.scroll(scroll_id=scroll_id,
+                                                 scroll="2m")
             scroll_id = response["_scroll_id"]
             hits = response["hits"]["hits"]
 
         # Сохраняем в Redis
-        await self.redis.set("genres_cache", json.dumps(genres_dict), ex=self.cache_ttl)
+        await self.redis.set("genres_cache",
+                             json.dumps(genres_dict),
+                             ex=self.cache_ttl)
         return [Genre(uuid=uid, name=name) for uid, name in genres_dict.items()]
-
 
     async def search_genres(self, query_str: str) -> List[Genre]:
         """
@@ -83,7 +92,8 @@ class GenreService:
         :notes:
             - Сначала ищет в Redis по ключу search_genres:{query_str}.
             - Если нет, делает nested search в Elasticsearch.
-            - Формирует уникальные объекты Genre, сериализует UUID в str и сохраняет в Redis.
+            - Формирует уникальные объекты Genre,
+              сериализует UUID в str и сохраняет в Redis.
         """
         cache_key = f"search_genres:{query_str}"
 
@@ -91,7 +101,8 @@ class GenreService:
         cached = await self.redis.get(cache_key)
         if cached:
             genres_dicts = json.loads(cached)
-            return [Genre(uuid=UUID(g["uuid"]), name=g["name"]) for g in genres_dicts]
+            return [Genre(uuid=UUID(g["uuid"]),
+                          name=g["name"]) for g in genres_dicts]
 
         # Elasticsearch запрос
         query = {
@@ -107,7 +118,7 @@ class GenreService:
                             }
                         }
                     },
-                    "inner_hits": {}  # опционально, если нужны только совпавшие вложенные объекты
+                    "inner_hits": {}
                 }
             }
         }
@@ -128,7 +139,8 @@ class GenreService:
         # Сохраняем в кэш
         await self.redis.set(
             cache_key,
-            json.dumps([{"uuid": str(g.uuid), "name": g.name} for g in result]),
+            json.dumps([{"uuid": str(g.uuid),
+                         "name": g.name} for g in result]),
             ex=self.cache_ttl,
         )
 
@@ -159,6 +171,7 @@ class GenreService:
             if g["uuid"] == genre_id:
                 return Genre(**g)
         return None
+
 
 async def get_genre_service(request: Request) -> GenreService:
     """
