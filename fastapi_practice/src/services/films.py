@@ -1,132 +1,189 @@
-from functools import lru_cache
-from typing import Optional, List
+import json
+from typing import List, Optional
+from uuid import UUID
 
 from elasticsearch import AsyncElasticsearch, NotFoundError
-from fastapi import Depends
+from fastapi import Request
 from redis.asyncio import Redis
 
-from db.elastic import get_elastic
-from db.redis import get_redis
 from models.film import Film, FilmShort
+from models.person import Person
+from models.genre import Genre
 
-# Время жизни кеша фильма в секундах
-FILM_CACHE_EXPIRE_IN_SECONDS = 60 * 5  # 5 минут
+
+FILM_CACHE_EXPIRE_IN_SECONDS = 300  # 5 минут TTL для всех кэшей
 
 
 class FilmService:
     """
-    Сервис для работы с фильмами.
-    Обеспечивает извлечение данных из Elasticsearch и кеширование в Redis.
+    Сервис для работы с фильмами с кэшированием в Redis.
+
+    Основная логика работы:
+    1. Проверка наличия данных в Redis по ключу.
+    2. Если данные есть, возвращаем из кэша.
+    3. Если данных нет, делаем запрос к Elasticsearch, формируем объект модели,
+       сохраняем результат в Redis и возвращаем его.
+    4. TTL кэша: 5 минут по умолчанию.
     """
 
-    def __init__(self, redis: Redis, elastic: AsyncElasticsearch):
+    def __init__(self, redis: Redis, elastic: AsyncElasticsearch, cache_ttl: int = FILM_CACHE_EXPIRE_IN_SECONDS):
+        """
+        Инициализация сервиса.
+
+        :param redis: экземпляр Redis для кэширования
+        :param elastic: экземпляр AsyncElasticsearch для запросов к ES
+        :param cache_ttl: время жизни кэша в секундах
+        """
         self.redis = redis
         self.elastic = elastic
+        self.cache_ttl = cache_ttl
 
-    async def get_by_id(self, film_id: str) -> Optional[Film]:
-        """
-        Получение фильма по ID.
-        Сначала пытаемся достать из Redis, если нет — из Elasticsearch.
-        """
-        film = await self._film_from_cache(film_id)
-        if film:
-            return film
-
-        film = await self._get_film_from_elastic(film_id)
-        if not film:
-            return None
-
-        await self._put_film_to_cache(film)
-        return film
 
     async def list_films(
         self,
         size: int = 50,
-        sort: str = '-imdb_rating'
+        sort: str = "-imdb_rating",
+        genre_uuid: Optional[UUID] = None
     ) -> List[FilmShort]:
         """
-        Список фильмов с сортировкой по рейтингу.
-        Возвращает сокращённую модель FilmShort.
+        Получение списка фильмов с сортировкой и фильтром по жанру с кэшированием.
+
+        :param size: количество фильмов в ответе
+        :param sort: поле сортировки, например "-imdb_rating"
+        :param genre_uuid: фильтр по UUID жанра
+        :return: список объектов FilmShort
+        :notes:
+            - Сначала ищет данные в Redis по уникальному ключу.
+            - Если нет, делает запрос в Elasticsearch, формирует FilmShort.
+            - Сохраняет результат в Redis и возвращает список.
         """
-        sort_field = sort.lstrip('-')
-        sort_order = 'desc' if sort.startswith('-') else 'asc'
+        cache_key = f"list_films:size={size}:sort={sort}:genre={genre_uuid}"
+        cached = await self.redis.get(cache_key)
+        if cached:
+            films_dicts = json.loads(cached)
+            return [FilmShort(**f) for f in films_dicts]
+
+        sort_field = sort.lstrip("-")
+        sort_order = "desc" if sort.startswith("-") else "asc"
 
         query = {
-            "sort": [{sort_field: {"order": sort_order}}],
             "size": size,
-            "_source": ["id", "title", "imdb_rating"]
+            "sort": [{sort_field: {"order": sort_order}}],
+            "_source": ["uuid", "title", "imdb_rating"]
         }
 
-        resp = await self.elastic.search(index='movies', body=query)
-        hits = resp['hits']['hits']
+        if genre_uuid:
+            query["query"] = {
+                "nested": {
+                    "path": "genres",
+                    "query": {"term": {"genres.uuid": str(genre_uuid)}}
+                }
+            }
 
-        result = []
-        for doc in hits:
-            source = doc['_source']
-            # создаем объект FilmShort, сразу конвертируем id в строку
-            result.append(FilmShort(
-                id=str(source['id']),
-                title=source['title'],
-                imdb_rating=source.get('imdb_rating')
-            ))
-        return result
+        resp = await self.elastic.search(index="movies", body=query)
+        films = [
+            FilmShort(
+                uuid=UUID(doc["_source"]["uuid"]),
+                title=doc["_source"]["title"],
+                imdb_rating=doc["_source"].get("imdb_rating")
+            ) for doc in resp["hits"]["hits"]
+        ]
 
-    async def _get_film_from_elastic(self, film_id: str) -> Optional[Film]:
+        await self.redis.set(
+            cache_key,
+            json.dumps([{"uuid": str(f.uuid), "title": f.title, "imdb_rating": f.imdb_rating} for f in films]),
+            ex=self.cache_ttl,
+        )
+        return films
+
+    async def search_films(self, query_str: str, size: int = 50) -> List[FilmShort]:
         """
-        Получение фильма из Elasticsearch.
-        Конвертируем списки dict -> списки строк (имена актёров, режиссёров и т.д.)
+        Полнотекстовый поиск фильмов с кэшированием (возвращает FilmShort).
+
+        :param query_str: поисковая строка
+        :param size: количество результатов
+        :return: список FilmShort
+        :notes:
+            - Сначала ищет кэш в Redis.
+            - Если нет, выполняет multi_match поиск в Elasticsearch по полям title и description.
+            - Формирует список FilmShort, сохраняет в Redis и возвращает.
         """
+        cache_key = f"search_films:{query_str}:{size}"
+        cached = await self.redis.get(cache_key)
+        if cached:
+            films_dicts = json.loads(cached)
+            return [FilmShort(**f) for f in films_dicts]
+
+        query = {
+            "size": size,
+            "_source": ["uuid", "title", "imdb_rating"],
+            "query": {
+                "multi_match": {
+                    "query": query_str,
+                    "fields": ["title^2", "description"]
+                }
+            }
+        }
+        resp = await self.elastic.search(index="movies", body=query)
+
+        films = [FilmShort(**doc["_source"]) for doc in resp["hits"]["hits"]]
+
+        await self.redis.set(
+            cache_key,
+            json.dumps([f.dict() for f in films], default=str),
+            ex=self.cache_ttl
+        )
+        return films
+
+
+    async def get_film_by_id(self, film_uuid: UUID) -> Optional[Film]:
+        """
+        Получение полного фильма по UUID с кэшированием.
+
+        :param film_uuid: UUID фильма
+        :return: объект Film или None, если фильм не найден
+        :notes:
+            - Сначала ищет фильм в Redis.
+            - Если нет, делает запрос в Elasticsearch.
+            - Формирует Film с жанрами и персоналиями.
+            - Сохраняет результат в Redis и возвращает объект.
+        """
+        cache_key = f"film:{film_uuid}"
+        cached = await self.redis.get(cache_key)
+        if cached:
+            return Film.parse_raw(cached)
+
         try:
-            doc = await self.elastic.get(index='movies', id=film_id)
+            doc = await self.elastic.get(index="movies", id=str(film_uuid))
         except NotFoundError:
             return None
 
-        source = doc['_source']
-
-        # Конвертируем списки словарей в списки строк
-        def extract_names(items):
-            if not items:
-                return []
-            return [item['name'] for item in items]
-
-        return Film(
-            id=str(source['id']),
-            title=source.get('title'),
-            description=source.get('description'),
-            imdb_rating=source.get('imdb_rating'),
-            genre=source.get('genre') or [],
-            actors=extract_names(source.get('actors')),
-            writers=extract_names(source.get('writers')),
-            directors=extract_names(source.get('directors')),
+        src = doc["_source"]
+        film = Film(
+            uuid=UUID(src["uuid"]),
+            title=src.get("title"),
+            description=src.get("description"),
+            imdb_rating=src.get("imdb_rating"),
+            genres=[Genre(uuid=UUID(g["uuid"]), name=g["name"]) for g in src.get("genres", [])],
+            actors=[Person(uuid=UUID(a["uuid"]), full_name=a["full_name"], role="actor") for a in src.get("actors", [])],
+            writers=[Person(uuid=UUID(w["uuid"]), full_name=w["full_name"], role="writer") for w in src.get("writers", [])],
+            directors=[Person(uuid=UUID(d["uuid"]), full_name=d["full_name"], role="director") for d in src.get("directors", [])],
         )
 
-    async def _film_from_cache(self, film_id: str) -> Optional[Film]:
-        """
-        Получение фильма из Redis.
-        """
-        data = await self.redis.get(str(film_id))
-        if not data:
-            return None
-        return Film.parse_raw(data)
+        await self.redis.set(cache_key, film.json(), ex=self.cache_ttl)
+        return film
 
-    async def _put_film_to_cache(self, film: Film):
-        """
-        Сохраняем фильм в Redis с временем жизни.
-        """
-        await self.redis.set(
-            str(film.id),
-            film.json(),
-            ex=FILM_CACHE_EXPIRE_IN_SECONDS
-        )
-
-
-@lru_cache()
-def get_film_service(
-        redis: Redis = Depends(get_redis),
-        elastic: AsyncElasticsearch = Depends(get_elastic),
-) -> FilmService:
+async def get_film_service(request: Request) -> FilmService:
     """
-    Dependency для FastAPI.
-    Позволяет внедрять FilmService через Depends().
+    Dependency для FastAPI через lifespan.
+
+    Берем redis и elastic из app.state.
+    Используется в endpoint'ах FastAPI для внедрения FilmService.
+
+    :param request: объект FastAPI Request
+    :return: экземпляр FilmService
     """
-    return FilmService(redis, elastic)
+    return FilmService(
+        elastic=request.app.state.elastic,
+        redis=request.app.state.redis
+    )
