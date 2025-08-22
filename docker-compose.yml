@@ -4,11 +4,10 @@ services:
   api:
     build: fastapi_practice
     container_name: fastapi_api
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
     volumes:
-      - ./src:/app/src
+      - ./fastapi_practice/src:/app/src
     environment:
       - PYTHONPATH=/app/src
       - REDIS_HOST=redis
@@ -51,18 +50,30 @@ services:
       timeout: 10s
       retries: 5
 
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.13.2
-    container_name: fastapi_kibana
-    environment:
-      ELASTICSEARCH_HOSTS: "http://elasticsearch:9200"
-    ports:
-      - "5601:5601"
+#  kibana:
+#    image: docker.elastic.co/kibana/kibana:8.13.2
+#    container_name: fastapi_kibana
+#    environment:
+#      ELASTICSEARCH_HOSTS: "http://elasticsearch:9200"
+#    ports:
+#      - "5601:5601"
+#    depends_on:
+#      - elasticsearch
+#    networks:
+#      - fastapi_net
+
+  etl:
+    build:
+      context: ./fastapi_practice
+    container_name: fastapi_etl
+    command: python etl/run_etl.py
+    volumes:
+      - ./etl:/app/etl
+      - ./data:/app/data
     depends_on:
       - elasticsearch
     networks:
       - fastapi_net
-
 
 volumes:
   es_data:

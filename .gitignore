@@ -43,10 +43,9 @@ docker-compose.override.yml
 *.sock
 
 # Elasticsearch
-*.json
+
 .es/
-!movies_data.json
-!movies_mapping.json
+
 
 # Pytest cache
 .pytest_cache/
@@ -67,3 +66,5 @@ dump.rdb
 # Misc
 *.bak
 *.tmp
+
+fastapi_practice/tests
