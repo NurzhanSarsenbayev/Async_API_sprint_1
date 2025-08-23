@@ -10,22 +10,26 @@ router = APIRouter()
 
 @router.get("/", response_model=List[Genre])
 async def genres_list(
+    page: int = Query(1, ge=1, description="Номер страницы"),
+    size: int = Query(10, ge=1, description="Количество жанров на странице"),
     genre_service: GenreService = Depends(get_genre_service),
 ):
     """
-    Получение списка всех жанров.
+    Получение списка жанров с пагинацией.
 
     Args:
+        page (int, optional): номер страницы, начиная с 1. По умолчанию 1.
+        size (int, optional): количество жанров на странице. По умолчанию 50.
         genre_service (GenreService): сервис для работы с жанрами
-        (инжектируется через Depends).
+            (инжектируется через Depends).
 
     Returns:
-        List[Genre]: список жанров.
+        List[Genre]: список жанров на текущей странице.
 
     Примечание:
         Данные кэшируются в Redis для ускорения повторных запросов.
     """
-    return await genre_service.list_genres()
+    return await genre_service.list_genres(size=size, page=page)
 
 
 @router.get("/search", response_model=List[Genre])

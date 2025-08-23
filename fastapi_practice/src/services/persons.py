@@ -7,6 +7,7 @@ from redis.asyncio import Redis
 import json
 
 from models.person import Person
+from models.film_short import FilmShort
 
 
 REDIS_URL = "redis://redis:6379"
@@ -101,22 +102,14 @@ class PersonService:
     async def get_person_by_id(self, person_id: str) -> Optional[Person]:
         """
         Получение одной персоны по UUID с кэшированием.
-
-        Сначала пробуем получить данные из Redis.
-        Если кэша нет, выполняем поиск по документам в Elasticsearch.
-
-        Args:
-            person_id (str): UUID персоны.
-
-        Returns:
-            Optional[Person]: объект Person или None, если не найден.
+        Дополнительно возвращает список фильмов, где персона участвовала.
         """
         cache_key = f"person:{person_id}"
         cached = await self.redis.get(cache_key)
         if cached:
             return Person.parse_raw(cached)
 
-        # fallback через поиск по документам
+        # ищем самого человека в ES
         body = {
             "query": {
                 "bool": {
@@ -133,15 +126,45 @@ class PersonService:
         hits = result["hits"]["hits"]
         if not hits:
             return None
+
+        # достаём инфо о человеке
+        person = None
         for role in ["actors", "directors", "writers"]:
             for p in hits[0]["_source"].get(role, []):
                 if p["uuid"] == person_id:
-                    person = Person(**p)
-                    await self.redis.set(cache_key,
-                                         person.json(),
-                                         ex=self.cache_ttl)
-                    return person
-        return None
+                    person = Person(uuid=UUID(p["uuid"]), full_name=p["full_name"], role=role[:-1])
+                    break
+            if person:
+                break
+
+        if not person:
+            return None
+
+        # ищем все фильмы с этим person_id
+        films_query = {
+            "_source": ["uuid", "title", "imdb_rating"],
+            "query": {
+                "bool": {
+                    "should": [
+                        {"nested": {"path": "actors", "query": {"term": {"actors.uuid": person_id}}}},
+                        {"nested": {"path": "writers", "query": {"term": {"writers.uuid": person_id}}}},
+                        {"nested": {"path": "directors", "query": {"term": {"directors.uuid": person_id}}}},
+                    ]
+                }
+            },
+            "size": 50
+        }
+        films_result = await self.elastic.search(index="movies", body=films_query)
+        person.films = [
+            FilmShort(uuid=UUID(f["_source"]["uuid"]),
+                      title=f["_source"]["title"],
+                      imdb_rating=f["_source"].get("imdb_rating"))
+            for f in films_result["hits"]["hits"]
+        ]
+
+        # кэшируем
+        await self.redis.set(cache_key, person.json(), ex=self.cache_ttl)
+        return person
 
     async def search_persons(self,
                              query_str: str) -> list[Person]:
@@ -193,9 +216,36 @@ class PersonService:
                 for p in src.get(role, []):
                     if p["uuid"] not in seen_uuids and p["full_name"] == query_str:
                         seen_uuids.add(p["uuid"])
-                        result.append(Person(uuid=UUID(p["uuid"]),
+                        person = Person(uuid=UUID(p["uuid"]),
                                              full_name=p["full_name"],
-                                             role=role[:-1]))
+                                             role=role[:-1])
+                        # фильмы для конкретного человека
+                        films_query = {
+                            "_source": ["uuid", "title", "imdb_rating"],
+                            "query": {
+                                "bool": {
+                                    "should": [
+                                        {"nested": {"path": "actors", "query": {"term": {"actors.uuid": p["uuid"]}}}},
+                                        {"nested": {"path": "writers", "query": {"term": {"writers.uuid": p["uuid"]}}}},
+                                        {"nested": {"path": "directors",
+                                                    "query": {"term": {"directors.uuid": p["uuid"]}}}},
+                                        # если нужно .keyword:
+                                        # {"nested": {"path": "actors", "query": {"term": {"actors.uuid.keyword": p["uuid"]}}}},
+                                    ],
+                                    "minimum_should_match": 1
+                                }
+                            },
+                            "size": 50,
+                            "track_total_hits": True
+                        }
+                        films_result = await self.elastic.search(index="movies", body=films_query)
+                        person.films = [
+                            FilmShort(uuid=UUID(f["_source"]["uuid"]),
+                                      title=f["_source"]["title"],
+                                      imdb_rating=f["_source"].get("imdb_rating"))
+                            for f in films_result["hits"]["hits"]
+                        ]
+                        result.append(person)
 
         # кэшируем результат
         await self.redis.set(

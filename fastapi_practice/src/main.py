@@ -7,16 +7,16 @@ from fastapi.responses import ORJSONResponse
 from redis.asyncio import Redis
 
 from api.v1 import films,genres,persons
-from core import config
+from core.config import settings
 from services.cache_builder import build_cache_on_startup
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- startup ---
-    app.state.redis = Redis(host=config.REDIS_HOST, port=config.REDIS_PORT)
+    app.state.redis = Redis(host=settings.redis_host, port=settings.redis_port)
     app.state.elastic = AsyncElasticsearch(
-        hosts=[f"http://{config.ELASTIC_HOST}:{config.ELASTIC_PORT}"]
+        hosts=[f"http://{settings.elastic_host}:{settings.elastic_port}"]
     )
 
     # запускаем кэширование в фоне

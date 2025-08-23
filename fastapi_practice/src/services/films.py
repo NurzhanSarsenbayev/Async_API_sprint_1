@@ -5,7 +5,8 @@ from elasticsearch import AsyncElasticsearch, NotFoundError
 from fastapi import Request
 from redis.asyncio import Redis
 
-from models.film import Film, FilmShort
+from models.film import Film
+from models.film_short import FilmShort
 from models.person import Person
 from models.genre import Genre
 
@@ -42,23 +43,22 @@ class FilmService:
     async def list_films(
         self,
         size: int = 50,
+        page: int = 1,
         sort: str = "-imdb_rating",
-        genre_uuid: Optional[UUID] = None
     ) -> List[FilmShort]:
         """
-        Получение списка фильмов с сортировкой
-        и фильтром по жанру с кэшированием.
+        Получение списка фильмов с сортировкой с кэшированием.
 
         :param size: количество фильмов в ответе
+        :param page: номер страницы, начиная с 1
         :param sort: поле сортировки, например "-imdb_rating"
-        :param genre_uuid: фильтр по UUID жанра
         :return: список объектов FilmShort
         :notes:
             - Сначала ищет данные в Redis по уникальному ключу.
             - Если нет, делает запрос в Elasticsearch, формирует FilmShort.
             - Сохраняет результат в Redis и возвращает список.
         """
-        cache_key = f"list_films:size={size}:sort={sort}:genre={genre_uuid}"
+        cache_key = f"list_films:page={page}:size={size}:sort={sort}"
         cached = await self.redis.get(cache_key)
         if cached:
             films_dicts = json.loads(cached)
@@ -66,20 +66,14 @@ class FilmService:
 
         sort_field = sort.lstrip("-")
         sort_order = "desc" if sort.startswith("-") else "asc"
+        from_ = (page - 1) * size  # смещение для пагинации
 
         query = {
+            "from": from_,
             "size": size,
             "sort": [{sort_field: {"order": sort_order}}],
             "_source": ["uuid", "title", "imdb_rating"]
         }
-
-        if genre_uuid:
-            query["query"] = {
-                "nested": {
-                    "path": "genres",
-                    "query": {"term": {"genres.uuid": str(genre_uuid)}}
-                }
-            }
 
         resp = await self.elastic.search(index="movies", body=query)
         films = [

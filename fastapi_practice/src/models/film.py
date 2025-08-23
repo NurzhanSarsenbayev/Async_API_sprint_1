@@ -6,18 +6,6 @@ from models.person import Person
 from models.genre import Genre
 
 
-class FilmShort(BaseModel):
-    """
-    Краткая информация о фильме для списков и выдачи API.
-
-    Attributes:
-        uuid (UUID): Уникальный идентификатор фильма.
-        title (str): Название фильма.
-        imdb_rating (Optional[float]): Рейтинг IMDb (может отсутствовать).
-    """
-    uuid: UUID
-    title: str
-    imdb_rating: Optional[float] = None
 
 
 class Film(BaseModel):

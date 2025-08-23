@@ -3,13 +3,14 @@ from typing import List
 from uuid import UUID
 
 from services.films import FilmService, get_film_service
-from models.film import FilmShort, Film
-
+from models.film import Film
+from models.film_short import FilmShort
 router = APIRouter()
 
 
 @router.get("/", response_model=List[FilmShort])
 async def list_films(
+    page: int = Query(1, ge=1, description="Номер страницы"),
     size: int = Query(10, ge=1, description="Количество фильмов на странице"),
     film_service: FilmService = Depends(get_film_service),
 ):
@@ -17,6 +18,7 @@ async def list_films(
     Получение списка фильмов с пагинацией.
 
     Args:
+        page (int, optional): номер страницы.
         size (int, optional): количество фильмов на странице. По умолчанию 10.
         film_service (FilmService): сервис для работы с фильмами
         (инжектируется через Depends).
@@ -28,7 +30,7 @@ async def list_films(
     Примечание:
         Данные кэшируются в Redis для ускорения повторных запросов.
     """
-    films = await film_service.list_films(size=size)
+    films = await film_service.list_films(size=size,page=page)
     return films
 
 

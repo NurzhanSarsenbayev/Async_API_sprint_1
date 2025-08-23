@@ -39,22 +39,23 @@ class GenreService:
         self.redis = redis
         self.cache_ttl = cache_ttl
 
-    async def list_genres(self) -> List[Genre]:
+    async def list_genres(
+            self,
+            size: int = 50,
+            page: int = 1
+    ) -> list[Genre]:
         """
-        Получение всех жанров с кэшированием.
+        Получение жанров с пагинацией и кэшированием.
 
+        :param size: количество жанров на странице
+        :param page: номер страницы, начиная с 1
         :return: список объектов Genre
-        :notes:
-            - Сначала пробует достать из Redis.
-            - Если нет, скроллит все документы в
-            Elasticsearch и собирает уникальные жанры.
-            - Сохраняет результат в Redis с TTL.
         """
-        genres_raw = await self.redis.get("genres_cache")
-        if genres_raw:
-            genres_dict = json.loads(genres_raw)
-            return [Genre(uuid=uid,
-                          name=name) for uid, name in genres_dict.items()]
+        cache_key = f"genres:page={page}:size={size}"
+        cached = await self.redis.get(cache_key)
+        if cached:
+            genres_dict = json.loads(cached)
+            return [Genre(uuid=uid, name=name) for uid, name in genres_dict.items()]
 
         # fallback через scroll
         genres_dict = {}
@@ -77,11 +78,15 @@ class GenreService:
             scroll_id = response["_scroll_id"]
             hits = response["hits"]["hits"]
 
-        # Сохраняем в Redis
-        await self.redis.set("genres_cache",
-                             json.dumps(genres_dict),
-                             ex=self.cache_ttl)
-        return [Genre(uuid=uid, name=name) for uid, name in genres_dict.items()]
+        genre_items = list(genres_dict.items())
+        start = (page - 1) * size
+        end = start + size
+        paged_genres = dict(genre_items[start:end])
+
+        # сохраняем в Redis
+        await self.redis.set(cache_key, json.dumps(paged_genres), ex=self.cache_ttl)
+
+        return [Genre(uuid=uid, name=name) for uid, name in paged_genres.items()]
 
     async def search_genres(self, query_str: str) -> List[Genre]:
         """
