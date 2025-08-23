@@ -8,7 +8,7 @@ from redis.asyncio import Redis
 
 from api.v1 import films,genres,persons
 from core.config import settings
-from services.cache_builder import build_cache_on_startup
+from services.cache_builder import build_cache, wait_for_elastic
 
 
 @asynccontextmanager
@@ -18,9 +18,11 @@ async def lifespan(app: FastAPI):
     app.state.elastic = AsyncElasticsearch(
         hosts=[f"http://{settings.elastic_host}:{settings.elastic_port}"]
     )
-
+    # Ждём готовности Elasticsearch
+    await wait_for_elastic(app.state.elastic, timeout=60)
+    # await wait_for_index(app.state.elastic, "movies", timeout=60)
     # запускаем кэширование в фоне
-    asyncio.create_task(build_cache_on_startup(app.state.elastic, app.state.redis))
+    asyncio.create_task(build_cache(app.state.elastic, app.state.redis))
 
     yield  # здесь приложение доступно
 
